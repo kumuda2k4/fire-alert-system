@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fire Alert Dashboard</title>
+
+  <!-- Firebase SDK v9 compat — no bundler needed -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
+  <style>
+    :root {
+      --green : #22c55e;
+      --red   : #ef4444;
+      --orange: #f97316;
+      --bg    : #0f172a;
+      --card  : #1e293b;
+      --border: #334155;
+      --text  : #f1f5f9;
+      --muted : #94a3b8;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 28px 16px 48px;
+    }
+
+    /* ── Header ───────────────────────────────── */
+    header { text-align: center; margin-bottom: 36px; }
+    header h1 { font-size: 1.7rem; font-weight: 800; }
+    header p  { color: var(--muted); font-size: 0.85rem; margin-top: 4px; }
+
+    .live-badge {
+      display: inline-flex; align-items: center; gap: 7px;
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 20px; padding: 5px 14px; font-size: 0.78rem;
+      margin-top: 10px; color: var(--muted);
+    }
+    .live-dot {
+      width: 8px; height: 8px; border-radius: 50%; background: var(--muted);
+    }
+    .live-dot.on { background: var(--green); box-shadow: 0 0 6px var(--green); }
+
+    /* ── Layout ───────────────────────────────── */
+    .layout {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: auto auto auto;
+      gap: 20px;
+      max-width: 820px;
+      margin: 0 auto;
+    }
+    @media (max-width: 600px) {
+      .layout { grid-template-columns: 1fr; }
+    }
+    .full { grid-column: 1 / -1; }
+
+    /* ── Card ─────────────────────────────────── */
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 24px;
+    }
+    .card-title {
+      font-size: 0.68rem; font-weight: 700; letter-spacing: 1.4px;
+      text-transform: uppercase; color: var(--muted); margin-bottom: 18px;
+    }
+
+    /* ── A. Status Light ──────────────────────── */
+    .status-wrap { text-align: center; }
+    .status-ring {
+      width: 120px; height: 120px; border-radius: 50%;
+      border: 5px solid var(--border);
+      margin: 0 auto 16px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 3rem;
+      transition: border-color .4s, box-shadow .4s, background .4s;
+    }
+    .status-ring.safe {
+      border-color: var(--green);
+      background: rgba(34,197,94,.12);
+      box-shadow: 0 0 32px rgba(34,197,94,.3);
+    }
+    .status-ring.fire {
+      border-color: var(--red);
+      background: rgba(239,68,68,.12);
+      box-shadow: 0 0 40px rgba(239,68,68,.45);
+      animation: pulsering 1s ease-in-out infinite;
+    }
+    @keyframes pulsering {
+      0%,100% { box-shadow: 0 0 20px rgba(239,68,68,.3); }
+      50%      { box-shadow: 0 0 60px rgba(239,68,68,.75); }
+    }
+    .status-label {
+      font-size: 1.4rem; font-weight: 800;
+      letter-spacing: 3px; text-transform: uppercase;
+    }
+    .status-label.safe { color: var(--green); }
+    .status-label.fire { color: var(--red); }
+    .status-sub { color: var(--muted); font-size: 0.8rem; margin-top: 5px; }
+
+    /* ── B. Sensor readings (DHT11 panel) ──────── */
+    .reading-row { display: flex; gap: 14px; }
+    .reading {
+      flex: 1; text-align: center;
+      background: rgba(255,255,255,.04);
+      border: 1px solid var(--border);
+      border-radius: 10px; padding: 12px;
+    }
+    .reading-val { font-size: 2rem; font-weight: 800; letter-spacing: -1px; }
+    .reading-unit { font-size: 0.85rem; color: var(--muted); }
+    .reading-name { font-size: 0.7rem; color: var(--muted); margin-top: 2px; }
+    .fire-flag {
+      display: inline-block; margin-top: 10px;
+      padding: 4px 12px; border-radius: 20px; font-size: 0.78rem; font-weight: 700;
+    }
+    .fire-flag.yes { background: rgba(239,68,68,.15); color: var(--red); border: 1px solid var(--red); }
+    .fire-flag.no  { background: rgba(34,197,94,.1);  color: var(--green); border: 1px solid var(--green); }
+
+    /* ── C. Live Gas Feed ─────────────────────── */
+    .gas-number { font-size: 3.2rem; font-weight: 800; letter-spacing: -2px; line-height: 1; }
+    .gas-unit   { font-size: 0.9rem; color: var(--muted); }
+
+    .bar-track {
+      background: rgba(255,255,255,.07);
+      border-radius: 8px; height: 14px;
+      margin: 18px 0 6px; overflow: hidden;
+      position: relative;
+    }
+    .bar-fill {
+      height: 100%; border-radius: 8px;
+      transition: width .7s ease, background .4s;
+    }
+    /* threshold marker line */
+    .threshold-mark {
+      position: absolute; top: 0; bottom: 0;
+      width: 2px; background: var(--orange);
+      left: calc(200 / 1023 * 100%);
+    }
+    .bar-legend {
+      display: flex; justify-content: space-between;
+      font-size: 0.72rem; color: var(--muted);
+    }
+    .bar-legend .mid { color: var(--orange); }
+
+    /* trend mini bars */
+    .trend {
+      display: flex; align-items: flex-end; gap: 3px;
+      height: 36px; margin-top: 14px;
+    }
+    .trend-bar {
+      flex: 1; min-height: 3px; border-radius: 3px 3px 0 0;
+      transition: height .4s ease, background .3s;
+    }
+
+    /* ── D. History Log ───────────────────────── */
+    .log-area {
+      max-height: 280px;
+      overflow-y: auto;
+    }
+    .log-area::-webkit-scrollbar { width: 4px; }
+    .log-area::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+    .log-row {
+      display: flex; gap: 12px; align-items: flex-start;
+      padding: 11px 0; border-bottom: 1px solid var(--border);
+    }
+    .log-row:last-child { border-bottom: none; }
+    .log-icon  { font-size: 1rem; flex-shrink: 0; margin-top: 1px; }
+    .log-type  { font-size: 0.82rem; font-weight: 700; color: var(--red); }
+    .log-time  { font-size: 0.72rem; color: var(--muted); margin-top: 2px; }
+    .log-meta  { font-size: 0.72rem; color: var(--muted); }
+    .log-empty { text-align: center; color: var(--muted); padding: 28px 0; font-size: 0.85rem; }
+
+    /* ── Footer ───────────────────────────────── */
+    .footer { text-align: center; color: var(--muted); font-size: 0.74rem; margin-top: 22px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>🔥 Fire Alert &amp; Security Dashboard</h1>
+  <p>IoT Real-Time Monitor — ESP8266 + DHT11 + MQ2</p>
+  <div class="live-badge">
+    <span class="live-dot" id="live-dot"></span>
+    <span id="live-label">Connecting…</span>
+  </div>
+</header>
+
+<div class="layout">
+
+  <!-- A. STATUS LIGHT -->
+  <div class="card">
+    <div class="card-title">System Status</div>
+    <div class="status-wrap">
+      <div class="status-ring" id="status-ring">⏳</div>
+      <div class="status-label" id="status-label">LOADING</div>
+      <div class="status-sub"  id="status-sub">Waiting for device…</div>
+    </div>
+  </div>
+
+  <!-- DHT11 READINGS (fireStatus proxy) -->
+  <div class="card">
+    <div class="card-title">Temperature &amp; Humidity (DHT11)</div>
+    <div class="reading-row">
+      <div class="reading">
+        <div class="reading-val" id="temp-val">—</div>
+        <div class="reading-unit">°C</div>
+        <div class="reading-name">Temperature</div>
+      </div>
+      <div class="reading">
+        <div class="reading-val" id="hum-val">—</div>
+        <div class="reading-unit">%</div>
+        <div class="reading-name">Humidity</div>
+      </div>
+    </div>
+    <div style="text-align:center;">
+      <span class="fire-flag no" id="fire-flag">🌡 Fire Status: SAFE</span>
+    </div>
+  </div>
+
+  <!-- C. LIVE GAS FEED — full width -->
+  <div class="card full">
+    <div class="card-title">Live Gas Feed — MQ2 (Real-Time PPM / Analog)</div>
+    <div>
+      <span class="gas-number" id="gas-val">—</span>
+      <span class="gas-unit"> / 1023 analog units</span>
+    </div>
+    <div class="bar-track">
+      <div class="bar-fill" id="gas-bar" style="width:0%"></div>
+      <div class="threshold-mark" title="Alert threshold: 200"></div>
+    </div>
+    <div class="bar-legend">
+      <span>0 — Clean air</span>
+      <span class="mid">⚠ 200 threshold</span>
+      <span>1023 — Max</span>
+    </div>
+    <!-- 12-point mini trend -->
+    <div class="trend" id="trend"></div>
+  </div>
+
+  <!-- D. HISTORY LOG — full width -->
+  <div class="card full">
+    <div class="card-title">Alert History — Life Cycle Log</div>
+    <div class="log-area" id="log-area">
+      <div class="log-empty">No alerts yet — system is monitoring…</div>
+    </div>
+  </div>
+
+</div>
+
+<div class="footer">
+  Last data received: <span id="last-time">—</span>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+  FIREBASE CONFIGURATION
+  ─────────────────────────────────────────────────────────────
+  1. Firebase Console → ⚙️ Project Settings → General
+  2. Scroll to "Your apps" → click </> → Register Web App
+  3. Copy the firebaseConfig object and paste values below
+  4. Database Rules must allow public read (see firebase-rules.json)
+═══════════════════════════════════════════════════════════ -->
+<script>
+const firebaseConfig = {
+   apiKey: "AIzaSyAI8ZLkYoI39jYdlFPKByEQDUVCkp5GWp8",
+  authDomain: "fire-alert-system-48f7f.firebaseapp.com",
+  databaseURL: "https://fire-alert-system-48f7f-default-rtdb.firebaseio.com",
+  projectId: "fire-alert-system-48f7f",
+  storageBucket: "fire-alert-system-48f7f.firebasestorage.app",
+  messagingSenderId: "157632641805",
+  appId: "1:157632641805:web:a8bec61d3ab582f88c0e44"
+};
+
+const GAS_THRESHOLD  = 200;
+const TEMP_THRESHOLD = 33;
+const TREND_MAX      = 12;
+
+const trendData = [];
+
+// ── Init ──────────────────────────────────────────────────
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+
+// ── Listeners ─────────────────────────────────────────────
+
+// Live sensor data
+db.ref('/sensor').on('value', snap => {
+  const d = snap.val();
+  if (!d) return;
+
+  setLive(true);
+  renderStatus(d.fireStatus, d.alertActive);
+  renderDHT(d.temperature, d.humidity, d.fireStatus);
+  renderGas(d.gasLevel);
+  document.getElementById('last-time').textContent = new Date().toLocaleTimeString();
+});
+
+// Alert history log — latest 20, newest first
+db.ref('/alerts').orderByKey().limitToLast(20).on('value', snap => {
+  renderLog(snap.val());
+});
+
+// Offline detection
+db.ref('.info/connected').on('value', snap => setLive(snap.val() === true));
+
+// ── Render functions ──────────────────────────────────────
+
+function setLive(on) {
+  document.getElementById('live-dot').classList.toggle('on', on);
+  document.getElementById('live-label').textContent = on ? 'Live' : 'Reconnecting…';
+}
+
+function renderStatus(fire, alert) {
+  const ring  = document.getElementById('status-ring');
+  const label = document.getElementById('status-label');
+  const sub   = document.getElementById('status-sub');
+  const isAlert = fire || alert;
+
+  ring.className  = 'status-ring ' + (isAlert ? 'fire' : 'safe');
+  ring.textContent = isAlert ? '🔥' : '✅';
+  label.className  = 'status-label ' + (isAlert ? 'fire' : 'safe');
+  label.textContent = isAlert ? 'FIRE ALERT' : 'SAFE';
+  sub.textContent   = isAlert
+    ? (fire ? 'High temperature detected — fire suspected!' : 'Gas threshold exceeded!')
+    : 'All readings within normal range';
+}
+
+function renderDHT(temp, hum, fire) {
+  if (temp != null) document.getElementById('temp-val').textContent = temp.toFixed(1);
+  if (hum  != null) document.getElementById('hum-val').textContent  = hum.toFixed(1);
+
+  const flag = document.getElementById('fire-flag');
+  if (fire) {
+    flag.className   = 'fire-flag yes';
+    flag.textContent = '🔥 Fire Status: HIGH';
+  } else {
+    flag.className   = 'fire-flag no';
+    flag.textContent = '🌡 Fire Status: SAFE';
+  }
+}
+
+function renderGas(gas) {
+  if (gas == null) return;
+
+  document.getElementById('gas-val').textContent = gas;
+
+  const pct = Math.min((gas / 1023) * 100, 100);
+  const bar = document.getElementById('gas-bar');
+  bar.style.width      = pct + '%';
+  bar.style.background =
+    gas >= GAS_THRESHOLD       ? 'var(--red)'    :
+    gas >= GAS_THRESHOLD * 0.7 ? 'var(--orange)' :
+                                  'var(--green)';
+
+  // Trend mini bars
+  trendData.push(gas);
+  if (trendData.length > TREND_MAX) trendData.shift();
+
+  const trend = document.getElementById('trend');
+  trend.innerHTML = '';
+  const maxVal = Math.max(...trendData, GAS_THRESHOLD);
+  trendData.forEach(v => {
+    const b = document.createElement('div');
+    b.className  = 'trend-bar';
+    b.style.height     = Math.max((v / maxVal) * 100, 4) + '%';
+    b.style.background =
+      v >= GAS_THRESHOLD       ? 'rgba(239,68,68,.7)'   :
+      v >= GAS_THRESHOLD * 0.7 ? 'rgba(249,115,22,.7)'  :
+                                  'rgba(34,197,94,.55)';
+    trend.appendChild(b);
+  });
+}
+
+function renderLog(data) {
+  const area = document.getElementById('log-area');
+  if (!data) {
+    area.innerHTML = '<div class="log-empty">No alerts yet — system is monitoring…</div>';
+    return;
+  }
+
+  // sort newest first
+  const rows = Object.entries(data).reverse();
+  area.innerHTML = '';
+
+  rows.forEach(([key, e]) => {
+    const isFire = e.fireStatus;
+    const reason = e.reason === 'TEMP_HIGH' ? 'High Temperature' : 'High Gas Level';
+
+    const div = document.createElement('div');
+    div.className = 'log-row';
+    div.innerHTML = `
+      <span class="log-icon">${isFire ? '🔥' : '💨'}</span>
+      <div>
+        <div class="log-type">${isFire ? 'FIRE ALERT' : 'GAS ALERT'} — ${reason}</div>
+        <div class="log-time">⏱ alertTime: ${formatTime(e.alertTime)}</div>
+        <div class="log-meta">
+          Gas: <strong>${e.gasLevel ?? '—'}</strong> &nbsp;|&nbsp;
+          Temp: <strong>${e.temperature != null ? e.temperature.toFixed(1) + '°C' : '—'}</strong> &nbsp;|&nbsp;
+          fireStatus: <strong>${e.fireStatus ? 'HIGH' : 'LOW'}</strong>
+        </div>
+      </div>`;
+    area.appendChild(div);
+  });
+}
+
+function formatTime(val) {
+  if (!val) return '—';
+  // If it's a millis value (device uptime), show it nicely
+  if (/^\d+$/.test(String(val))) {
+    const s = Math.floor(val / 1000);
+    const m = Math.floor(s / 60);
+    const h = Math.floor(m / 60);
+    const label = h > 0 ? `${h}h ${m%60}m ${s%60}s` :
+                  m > 0 ? `${m}m ${s%60}s` : `${s}s uptime`;
+    return label + ` (raw: ${val})`;
+  }
+  try { return new Date(val).toLocaleString(); } catch { return val; }
+}
+</script>
+</body>
+</html>
